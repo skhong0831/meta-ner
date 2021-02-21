@@ -41,7 +41,8 @@ import pickle
 from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
 from pytorch_pretrained_bert.tokenization import BertTokenizer
 
-def set_work_dir(local_path="ner_bert_crf", server_path="ner_bert_crf"):
+# def set_work_dir(local_path="ner_bert_crf", server_path="ner_bert_crf"):
+def set_work_dir(local_path="git/NER-BERT-CRF", server_path="ner_bert_crf"):
     if (os.path.exists(os.getenv("HOME")+'/'+local_path)):
         os.chdir(os.getenv("HOME")+'/'+local_path)
     elif (os.path.exists(os.getenv("HOME")+'/'+server_path)):
@@ -50,7 +51,7 @@ def set_work_dir(local_path="ner_bert_crf", server_path="ner_bert_crf"):
         raise Exception('Set work path error!')
 
 
-def get_data_dir(local_path="ner_bert_crf", server_path="ner_bert_crf"):
+def get_data_dir(local_path="git/NER-BERT-CRF", server_path="ner_bert_crf"):
     if (os.path.exists(os.getenv("HOME")+'/'+local_path)):
         return os.getenv("HOME")+'/'+local_path
     elif (os.path.exists(os.getenv("HOME")+'/'+server_path)):
@@ -71,7 +72,8 @@ print('Cuda is available?', cuda_yes)
 device = torch.device("cuda:0" if cuda_yes else "cpu")
 print('Device:', device)
 
-data_dir = os.path.join(get_data_dir(), 'NER_data/CoNLL2003/')
+data_dir = os.path.join(get_data_dir(), 'data/CoNLL2003/')
+# data_dir = os.path.join(get_data_dir(), 'data/BC5CDR-chem-IOBES/')
 # "Whether to run training."
 do_train = True
 # "Whether to run eval on the dev set."
@@ -79,16 +81,16 @@ do_eval = True
 # "Whether to run the model in inference mode on the test set."
 do_predict = True
 # Whether load checkpoint file before train model
-load_checkpoint = True
+load_checkpoint = False
 # "The vocabulary file that the BERT model was trained on."
-max_seq_length = 180 #256
+max_seq_length = 140 #256
 batch_size = 32 #32
 # "The initial learning rate for Adam."
 learning_rate0 = 5e-5
 lr0_crf_fc = 8e-5
 weight_decay_finetune = 1e-5 #0.01
 weight_decay_crf_fc = 5e-6 #0.005
-total_train_epochs = 15
+total_train_epochs = 10
 gradient_accumulation_steps = 1
 warmup_proportion = 0.1
 output_dir = './output/'
@@ -191,6 +193,31 @@ class DataProcessor(object):
                 out_lists.append([words,pos_tags,bio_pos_tags,ner_labels])
         return out_lists
 
+    @classmethod
+    def _read_data_from_bio(cls, input_file):
+        """
+        Reads a BIO data.
+        """
+        with open(input_file) as f:
+            out_lists = []
+            entries = f.read().strip().split("\n\n")
+            for entry in entries:
+                words = []
+                ner_labels = []
+                pos_tags = []
+                bio_pos_tags = []
+                for line in entry.splitlines():
+                    pieces = line.strip().split()
+                    if len(pieces) < 1:
+                        continue
+                    word = pieces[0]
+                    # if word == "-DOCSTART-" or word == '':
+                    #     continue
+                    words.append(word)
+                    ner_labels.append(pieces[-1])
+                out_lists.append([words,pos_tags,bio_pos_tags,ner_labels])
+        return out_lists
+
 
 class CoNLLDataProcessor(DataProcessor):
     '''
@@ -205,15 +232,74 @@ class CoNLLDataProcessor(DataProcessor):
 
     def get_train_examples(self, data_dir):
         return self._create_examples(
-            self._read_data(os.path.join(data_dir, "train.txt")))
+            self._read_data(os.path.join(data_dir, "eng.train")))
 
     def get_dev_examples(self, data_dir):
         return self._create_examples(
-            self._read_data(os.path.join(data_dir, "valid.txt")))
+            self._read_data(os.path.join(data_dir, "eng.testa")))
 
     def get_test_examples(self, data_dir):
         return self._create_examples(
-            self._read_data(os.path.join(data_dir, "test.txt")))
+            self._read_data(os.path.join(data_dir, "eng.testb")))
+
+    def get_labels(self):
+        return self._label_types
+
+    def get_num_labels(self):
+        return self.get_num_labels
+
+    def get_label_map(self):
+        return self._label_map
+    
+    def get_start_label_id(self):
+        return self._label_map['[CLS]']
+
+    def get_stop_label_id(self):
+        return self._label_map['[SEP]']
+
+    def _create_examples(self, all_lists):
+        examples = []
+        for (i, one_lists) in enumerate(all_lists):
+            guid = i
+            words = one_lists[0]
+            labels = one_lists[-1]
+            examples.append(InputExample(
+                guid=guid, words=words, labels=labels))
+        return examples
+
+    def _create_examples2(self, lines):
+        examples = []
+        for (i, line) in enumerate(lines):
+            guid = i
+            text = line[0]
+            ner_label = line[-1]
+            examples.append(InputExample(
+                guid=guid, text_a=text, labels_a=ner_label))
+        return examples
+
+
+class BC5CDR_chem_DataProcessor(DataProcessor):
+    '''
+    BC5CDR-chem-BIOES
+    '''
+
+    def __init__(self):
+        self._label_types = [ 'X', '[CLS]', '[SEP]', 'O', 'S-Chemical', 'B-Chemical', 'I-Chemical', 'E-Chemical']
+        self._num_labels = len(self._label_types)
+        self._label_map = {label: i for i,
+                           label in enumerate(self._label_types)}
+
+    def get_train_examples(self, data_dir):
+        return self._create_examples(
+            self._read_data_from_bio(os.path.join(data_dir, "train.tsv")))
+
+    def get_dev_examples(self, data_dir):
+        return self._create_examples(
+            self._read_data_from_bio(os.path.join(data_dir, "devel.tsv")))
+
+    def get_test_examples(self, data_dir):
+        return self._create_examples(
+            self._read_data_from_bio(os.path.join(data_dir, "test.tsv")))
 
     def get_labels(self):
         return self._label_types
@@ -372,6 +458,7 @@ if cuda_yes:
 
 # Load pre-trained model tokenizer (vocabulary)
 conllProcessor = CoNLLDataProcessor()
+# conllProcessor = BC5CDR_chem_DataProcessor()
 label_list = conllProcessor.get_labels()
 label_map = conllProcessor.get_label_map()
 train_examples = conllProcessor.get_train_examples(data_dir)
@@ -416,8 +503,8 @@ test_dataloader = data.DataLoader(dataset=test_dataset,
 '''
 print('*** Use only BertForTokenClassification ***')
 
-if load_checkpoint and os.path.exists(output_dir+'/ner_bert_checkpoint.pt'):
-    checkpoint = torch.load(output_dir+'/ner_bert_checkpoint.pt', map_location='cpu')
+if load_checkpoint and os.path.exists(output_dir+'ner_bert_crf_checkpoint.pt'):
+    checkpoint = torch.load(output_dir+'ner_bert_crf_checkpoint.pt', map_location='cpu')
     start_epoch = checkpoint['epoch']+1
     valid_acc_prev = checkpoint['valid_acc']
     valid_f1_prev = checkpoint['valid_f1']
@@ -511,10 +598,7 @@ for epoch in range(start_epoch, total_train_epochs):
         print("Epoch:{}-{}/{}, CrossEntropyLoss: {} ".format(epoch, step, len(train_dataloader), loss.item()))
     
     print('--------------------------------------------------------------')
-    print("Epoch:{} completed, Total training's Loss: {}, Spend: {}m".format(epoch, tr_loss, (time.time() - 
-                                                                                             
-                                                                                             
-                                                                                             )/60.0))
+    print("Epoch:{} completed, Total training's Loss: {}, Spend: {}m".format(epoch, tr_loss, (time.time())/60.0))
     valid_acc, valid_f1 = evaluate(model, dev_dataloader, batch_size, epoch, 'Valid_set')
     # Save a checkpoint
     if valid_f1 > valid_f1_prev:
@@ -530,7 +614,8 @@ evaluate(model, test_dataloader, batch_size, total_train_epochs-1, 'Test_set')
 '''
 Test_set prediction using the best epoch of NER_BERT model
 '''
-checkpoint = torch.load(output_dir+'/ner_bert_checkpoint.pt', map_location='cpu')
+# checkpoint = torch.load(output_dir+'bc5cdr_chem_ner_bert_crf_checkpoint.pt', map_location='cpu')
+checkpoint = torch.load(output_dir+'ner_bert_crf_checkpoint.pt', map_location='cpu')
 epoch = checkpoint['epoch']
 valid_acc_prev = checkpoint['valid_acc']
 valid_f1_prev = checkpoint['valid_f1']
@@ -727,8 +812,8 @@ bert_model = BertModel.from_pretrained(bert_model_scale)
 model = BERT_CRF_NER(bert_model, start_label_id, stop_label_id, len(label_list), max_seq_length, batch_size, device)
 
 #%%
-if load_checkpoint and os.path.exists(output_dir+'/ner_bert_crf_checkpoint.pt'):
-    checkpoint = torch.load(output_dir+'/ner_bert_crf_checkpoint.pt', map_location='cpu')
+if load_checkpoint and os.path.exists(output_dir+'ner_bert_crf_checkpoint.pt'):
+    checkpoint = torch.load(output_dir+'ner_bert_crf_checkpoint.pt', map_location='cpu')
     start_epoch = checkpoint['epoch']+1
     valid_acc_prev = checkpoint['valid_acc']
     valid_f1_prev = checkpoint['valid_f1']
@@ -854,7 +939,7 @@ evaluate(model, test_dataloader, batch_size, total_train_epochs-1, 'Test_set')
 '''
 Test_set prediction using the best epoch of NER_BERT_CRF model
 '''
-checkpoint = torch.load(output_dir+'/ner_bert_crf_checkpoint.pt', map_location='cpu')
+checkpoint = torch.load(output_dir+'ner_bert_crf_checkpoint.pt', map_location='cpu')
 epoch = checkpoint['epoch']
 valid_acc_prev = checkpoint['valid_acc']
 valid_f1_prev = checkpoint['valid_f1']
